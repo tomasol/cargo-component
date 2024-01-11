@@ -50,24 +50,19 @@ pub fn root() -> Result<PathBuf> {
     path.pop(); // remove `debug` or `release`
     path.push("tests");
     path.push("cargo-component");
-    fs::create_dir_all(&path)?;
+    let root = path.join(format!("t{id}"));
+    fs::create_dir_all(&root)?;
+    exclude_test_directories(&root)?;
 
-    exclude_test_directories()?;
-
-    Ok(path.join(format!("t{id}")))
+    Ok(root)
 }
 
 // This works around an apparent bug in cargo where
 // a directory is explicitly excluded from a workspace,
 // but `cargo new` still detects `workspace.package` settings
 // and sets them to be inherited in the new project.
-fn exclude_test_directories() -> Result<()> {
-    let mut path = env::current_exe()?;
-    path.pop(); // remove test exe name
-    path.pop(); // remove `deps`
-    path.pop(); // remove `debug` or `release`
-    path.push("tests");
-    path.push("Cargo.toml");
+fn exclude_test_directories(root: &Path) -> Result<()> {
+    let path = root.join("Cargo.toml");
 
     if !path.exists() {
         fs::write(
@@ -84,10 +79,8 @@ fn exclude_test_directories() -> Result<()> {
 }
 
 pub fn create_root() -> Result<PathBuf> {
-    let root = root()?;
-    drop(fs::remove_dir_all(&root));
-    fs::create_dir_all(&root)?;
-    Ok(root)
+    drop(fs::remove_dir_all(root()?));
+    root()
 }
 
 pub fn cargo_component(args: &str) -> Command {
@@ -241,8 +234,10 @@ pub async fn spawn_server(root: &Path) -> Result<(ServerInstance, warg_client::C
     Ok((instance, config))
 }
 
+#[derive(Debug)]
 pub struct Project {
     root: PathBuf,
+    workspace_root: PathBuf,
 }
 
 pub struct ProjectBuilder {
@@ -252,7 +247,10 @@ pub struct ProjectBuilder {
 impl ProjectBuilder {
     pub fn new(root: PathBuf) -> Self {
         Self {
-            project: Project { root },
+            project: Project {
+                workspace_root: root.clone(),
+                root,
+            },
         }
     }
 
@@ -270,22 +268,14 @@ impl ProjectBuilder {
     pub fn build(&mut self) -> Project {
         Project {
             root: self.project.root.clone(),
+            workspace_root: self.project.workspace_root.clone(),
         }
     }
 }
 
 impl Project {
     pub fn new(name: &str) -> Result<Self> {
-        let root = create_root()?;
-
-        cargo_component(&format!("new --reactor {name}"))
-            .current_dir(&root)
-            .assert()
-            .try_success()?;
-
-        Ok(Self {
-            root: root.join(name),
-        })
+        Self::with_root(&create_root()?, name, "")
     }
 
     pub fn new_bin(name: &str) -> Result<Self> {
@@ -298,6 +288,7 @@ impl Project {
 
         Ok(Self {
             root: root.join(name),
+            workspace_root: root,
         })
     }
 
@@ -309,6 +300,7 @@ impl Project {
 
         Ok(Self {
             root: root.join(name),
+            workspace_root: root.to_path_buf(),
         })
     }
 
@@ -336,8 +328,12 @@ impl Project {
         &self.root
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     pub fn build_dir(&self) -> PathBuf {
-        self.root().join("target")
+        self.workspace_root.join("target")
     }
 
     pub fn debug_wasm(&self, name: &str) -> PathBuf {
