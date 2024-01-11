@@ -177,9 +177,9 @@ fn test_validate_add_from_path() -> Result<()> {
 #[test]
 fn two_projects_in_one_workspace_validate_add_from_path() -> Result<()> {
     let root = create_root()?;
-    let foo = Project::with_root(&root, "foo", "")?;
-    let bar = Project::with_root(&root, "bar", "")?;
-    validate_add_from_path(&foo)?;
-    validate_add_from_path(&bar)?;
+    let p1 = Project::with_root(&root, "foo", "")?;
+    let p2 = Project::with_root(&root, "bar", "")?;
+    validate_add_from_path(&p1)?;
+    validate_add_from_path(&p2)?;
     Ok(())
 }

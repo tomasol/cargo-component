@@ -61,7 +61,7 @@ pub fn root() -> Result<PathBuf> {
 // a directory is explicitly excluded from a workspace,
 // but `cargo new` still detects `workspace.package` settings
 // and sets them to be inherited in the new project.
-fn exclude_test_directories(root: &PathBuf) -> Result<()> {
+fn exclude_test_directories(root: &Path) -> Result<()> {
     let path = root.join("Cargo.toml");
 
     if !path.exists() {
@@ -79,7 +79,7 @@ fn exclude_test_directories(root: &PathBuf) -> Result<()> {
 }
 
 pub fn create_root() -> Result<PathBuf> {
-    drop(fs::remove_dir_all(&root()?));
+    drop(fs::remove_dir_all(root()?));
     root()
 }
 
@@ -234,8 +234,10 @@ pub async fn spawn_server(root: &Path) -> Result<(ServerInstance, warg_client::C
     Ok((instance, config))
 }
 
+#[derive(Debug)]
 pub struct Project {
     root: PathBuf,
+    workspace_root: PathBuf,
 }
 
 pub struct ProjectBuilder {
@@ -245,7 +247,10 @@ pub struct ProjectBuilder {
 impl ProjectBuilder {
     pub fn new(root: PathBuf) -> Self {
         Self {
-            project: Project { root },
+            project: Project {
+                workspace_root: root.clone(),
+                root,
+            },
         }
     }
 
@@ -263,6 +268,7 @@ impl ProjectBuilder {
     pub fn build(&mut self) -> Project {
         Project {
             root: self.project.root.clone(),
+            workspace_root: self.project.workspace_root.clone(),
         }
     }
 }
@@ -282,6 +288,7 @@ impl Project {
 
         Ok(Self {
             root: root.join(name),
+            workspace_root: root,
         })
     }
 
@@ -293,6 +300,7 @@ impl Project {
 
         Ok(Self {
             root: root.join(name),
+            workspace_root: root.to_path_buf(),
         })
     }
 
@@ -320,8 +328,12 @@ impl Project {
         &self.root
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
     pub fn build_dir(&self) -> PathBuf {
-        self.root().join("target")
+        self.workspace_root.join("target")
     }
 
     pub fn debug_wasm(&self, name: &str) -> PathBuf {
