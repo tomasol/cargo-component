@@ -289,7 +289,6 @@ impl NewCommand {
         metadata["component"] = Item::Table(component);
 
         doc["package"]["metadata"] = Item::Table(metadata);
-        doc["dependencies"][BINDINGS_CRATE_NAME] = value(env!("CARGO_PKG_VERSION"));
 
         fs::write(&manifest_path, doc.to_string()).with_context(|| {
             format!(
@@ -298,6 +297,15 @@ impl NewCommand {
             )
         })?;
 
+        // Run cargo add cargo-component-bindings
+        let mut cargo_add_command = std::process::Command::new("cargo");
+        cargo_add_command.arg("add");
+        cargo_add_command.arg("--quiet");
+        cargo_add_command.arg(format!("{BINDINGS_CRATE_NAME}"));
+        cargo_add_command.current_dir(out_dir);
+        if let Err(e) = cargo_add_command.status() {
+            bail!("failed to execute `cargo add` command: {e}");
+        }
         config.terminal().status(
             "Updated",
             format!("manifest of package `{name}`", name = name.display),
