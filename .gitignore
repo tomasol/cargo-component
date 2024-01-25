@@ -12,3 +12,4 @@ target
 .cargo
 publish
 vendor
+.direnv/
