@@ -1,8 +1,9 @@
 use crate::support::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use predicates::{prelude::*, str::contains};
-use std::fs;
+use std::{fs, rc::Rc};
+use tempfile::TempDir;
 use toml_edit::value;
 
 mod support;
@@ -27,11 +28,11 @@ fn requires_package() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn validate_the_package_exists() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
-    let project = Project::with_root(&root, "foo", "")?;
+    let project = Project::with_dir(dir.clone(), "foo", "")?;
 
     project
         .cargo_component("add foo:bar")
@@ -44,13 +45,13 @@ async fn validate_the_package_exists() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn validate_the_version_exists() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_component(&config, "foo:bar", "1.1.0", "(component)", true).await?;
 
-    let project = Project::with_root(&root, "foo", "")?;
+    let project = Project::with_dir(dir.clone(), "foo", "")?;
 
     project
         .cargo_component("add foo:bar")
@@ -74,13 +75,13 @@ async fn validate_the_version_exists() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn adds_dependencies_to_target_component() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_component(&config, "foo:bar", "1.1.0", "(component)", true).await?;
 
-    let project = Project::with_root(&root, "foo_target", "")?;
+    let project = Project::with_dir(dir.clone(), "foo_target", "")?;
 
     let manifest = fs::read_to_string(project.root().join("Cargo.toml"))?;
     assert!(!contains("package.metadata.component.target.dependencies").eval(&manifest));
@@ -108,7 +109,6 @@ async fn adds_dependencies_to_target_component() -> Result<()> {
 fn checks_for_duplicate_dependencies() -> Result<()> {
     let project = Project::new("foo")?;
     project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
         doc["package"]["metadata"]["component"]["dependencies"]["foo:bar"] = value("1.2.3");
         Ok(doc)
     })?;
@@ -126,13 +126,13 @@ fn checks_for_duplicate_dependencies() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn prints_modified_manifest_for_dry_run() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_component(&config, "foo:bar", "1.2.3", "(component)", true).await?;
 
-    let project = Project::with_root(&root, "foo", "")?;
+    let project = Project::with_dir(dir.clone(), "foo", "")?;
 
     project
         .cargo_component("add --dry-run foo:bar")
@@ -150,10 +150,7 @@ async fn prints_modified_manifest_for_dry_run() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn validate_add_from_path() -> Result<()> {
-    let project = Project::new("foo")?;
-
+fn validate_add_from_path(project: &Project) -> Result<()> {
     project
         .cargo_component("add --path foo/baz foo:baz")
         .assert()
@@ -167,6 +164,37 @@ fn validate_add_from_path() -> Result<()> {
     let manifest = fs::read_to_string(project.root().join("Cargo.toml"))?;
     assert!(contains(r#""foo:baz" = { path = "foo/baz" }"#).eval(&manifest));
     assert!(contains(r#""foo:qux" = { path = "foo/qux" }"#).eval(&manifest));
+    Ok(())
+}
 
+#[test]
+fn test_validate_add_from_path() -> Result<()> {
+    let project = Project::new("foo")?;
+    validate_add_from_path(&project)?;
+    Ok(())
+}
+
+#[test]
+fn two_projects_in_one_workspace_validate_add_from_path() -> Result<()> {
+    let temp_dir = Rc::new(TempDir::new()?);
+    let cargo_workspace = temp_dir.path().join("Cargo.toml");
+    fs::write(
+        &cargo_workspace,
+        r#"
+[workspace]
+resolver = "2"
+"#,
+    )
+    .with_context(|| {
+        format!(
+            "failed to write `{cargo_workspace}`",
+            cargo_workspace = cargo_workspace.display()
+        )
+    })?;
+    let p1 = Project::with_dir(temp_dir.clone(), "foo", "")?;
+    let p2 = Project::with_dir(temp_dir.clone(), "bar", "")?;
+
+    validate_add_from_path(&p1)?;
+    validate_add_from_path(&p2)?;
     Ok(())
 }

@@ -1,17 +1,16 @@
+use std::rc::Rc;
+
 use crate::support::*;
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use predicates::{prelude::PredicateBooleanExt, str::contains};
+use tempfile::TempDir;
 
 mod support;
 
 #[test]
 fn it_prints_metadata() -> Result<()> {
     let project = Project::new("foo")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
 
     project
         .cargo_component("metadata --format-version 1")
@@ -39,49 +38,44 @@ fn it_rejects_invalid_format_versions() -> Result<()> {
 
 #[test]
 fn it_prints_workspace_metadata() -> Result<()> {
-    let project = project()?
-        .file(
-            "Cargo.toml",
-            r#"[workspace]
-members = ["foo", "bar", "baz"]
-"#,
-        )?
-        .file(
-            "baz/Cargo.toml",
-            r#"[package]
+    let dir = Rc::new(TempDir::new()?);
+    let project = Project {
+        dir: dir.clone(),
+        root: dir.path().to_owned(),
+    };
+
+    project.file(
+        "baz/Cargo.toml",
+        r#"[package]
 name = "baz"
 version = "0.1.0"
 edition = "2021"
     
 [dependencies]
 "#,
-        )?
-        .file("baz/src/lib.rs", "")?
-        .build();
+    )?;
+
+    project.file("baz/src/lib.rs", "")?;
 
     project
-        .cargo_component("new --reactor foo")
+        .cargo_component("new --lib foo")
         .assert()
         .stderr(contains("Updated manifest of package `foo`"))
         .success();
 
-    let member = ProjectBuilder::new(project.root().join("foo")).build();
-    member.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
-
     project
-        .cargo_component("new --reactor bar")
+        .cargo_component("new --lib bar")
         .assert()
         .stderr(contains("Updated manifest of package `bar`"))
         .success();
 
-    let member = ProjectBuilder::new(project.root().join("bar")).build();
-    member.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    // Add the workspace after all of the packages have been created.
+    project.file(
+        "Cargo.toml",
+        r#"[workspace]
+members = ["foo", "bar", "baz"]
+"#,
+    )?;
 
     project
         .cargo_component("metadata --format-version 1")

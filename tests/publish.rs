@@ -3,7 +3,8 @@ use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use predicates::str::contains;
 use semver::Version;
-use std::fs;
+use std::{fs, rc::Rc};
+use tempfile::TempDir;
 use toml_edit::{value, Array};
 use warg_client::Client;
 use warg_protocol::registry::PackageId;
@@ -23,9 +24,9 @@ fn help() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn it_publishes_a_component() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_wit(
         &config,
@@ -40,11 +41,7 @@ world foo {
     )
     .await?;
 
-    let project = Project::with_root(&root, "foo", "--namespace test --target my:world")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    let project = Project::with_dir(dir.clone(), "foo", "--namespace test --target my:world")?;
 
     // Ensure there's a using declaration in the generated source
     let source = fs::read_to_string(project.root().join("src/lib.rs"))?;
@@ -70,9 +67,9 @@ world foo {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn it_fails_if_package_does_not_exist() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_wit(
         &config,
@@ -87,11 +84,7 @@ world foo {
     )
     .await?;
 
-    let project = Project::with_root(&root, "foo", "--namespace test --target my:world")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    let project = Project::with_dir(dir.clone(), "foo", "--namespace test --target my:world")?;
 
     project
         .cargo_component("publish")
@@ -105,9 +98,9 @@ world foo {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn it_publishes_a_dependency() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     publish_wit(
         &config,
@@ -121,11 +114,7 @@ world foo {
     )
     .await?;
 
-    let project = Project::with_root(&root, "foo", "--namespace test --target my:world/foo")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    let project = Project::with_dir(dir.clone(), "foo", "--namespace test --target my:world/foo")?;
 
     project
         .cargo_component("publish --init")
@@ -136,11 +125,7 @@ world foo {
 
     validate_component(&project.release_wasm("foo"))?;
 
-    let project = Project::with_root(&root, "bar", "--namespace test --target my:world")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    let project = Project::with_dir(dir.clone(), "bar", "--namespace test --target my:world")?;
 
     project
         .cargo_component("add test:foo")
@@ -148,7 +133,8 @@ world foo {
         .stderr(contains("Added dependency `test:foo` with version `0.1.0`"))
         .success();
 
-    let source = r#"cargo_component_bindings::generate!();
+    let source = r#"
+mod bindings;
 use bindings::Guest;
 struct Component;
 impl Guest for Component {
@@ -174,9 +160,9 @@ impl Guest for Component {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn it_publishes_with_registry_metadata() -> Result<()> {
-    let root = create_root()?;
-    let (_server, config) = spawn_server(&root).await?;
-    config.write_to_file(&root.join("warg-config.json"))?;
+    let dir = Rc::new(TempDir::new()?);
+    let (_server, config) = spawn_server(dir.path()).await?;
+    config.write_to_file(&dir.path().join("warg-config.json"))?;
 
     let authors = ["Jane Doe <jane@example.com>"];
     let categories = ["wasm"];
@@ -186,10 +172,8 @@ async fn it_publishes_with_registry_metadata() -> Result<()> {
     let homepage = "https://example.com/home";
     let repository = "https://example.com/repo";
 
-    let project = Project::with_root(&root, "foo", "")?;
+    let project = Project::with_dir(dir.clone(), "foo", "")?;
     project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-
         let package = &mut doc["package"];
         package["authors"] = value(Array::from_iter(authors));
         package["categories"] = value(Array::from_iter(categories));

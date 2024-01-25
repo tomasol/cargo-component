@@ -1,7 +1,4 @@
-use crate::{
-    config::Config, generator::SourceGenerator, metadata, metadata::DEFAULT_WIT_DIR,
-    BINDINGS_CRATE_NAME,
-};
+use crate::{config::Config, generator::SourceGenerator, metadata, metadata::DEFAULT_WIT_DIR};
 use anyhow::{bail, Context, Result};
 use cargo_component_core::{
     command::CommonOptions,
@@ -19,6 +16,8 @@ use std::{
 };
 use toml_edit::{table, value, Document, Item, Table, Value};
 use url::Url;
+
+const WIT_BINDGEN_CRATE: &str = "wit-bindgen";
 
 fn escape_wit(s: &str) -> Cow<str> {
     match s {
@@ -47,13 +46,13 @@ pub struct NewCommand {
     #[clap(long = "vcs", value_name = "VCS", value_parser = ["git", "hg", "pijul", "fossil", "none"])]
     pub vcs: Option<String>,
 
-    /// Create a command component [default]
-    #[clap(long = "command", conflicts_with("reactor"))]
+    /// Create a CLI command component [default]
+    #[clap(long = "command", conflicts_with("lib"))]
     pub command: bool,
 
-    /// Create a reactor component
-    #[clap(long = "reactor")]
-    pub reactor: bool,
+    /// Create a library (reactor) component
+    #[clap(long = "lib", alias = "reactor")]
+    pub lib: bool,
 
     /// Edition to set for the generated crate
     #[clap(long = "edition", value_name = "YEAR", value_parser = ["2015", "2018", "2021"])]
@@ -76,12 +75,7 @@ pub struct NewCommand {
     pub editor: Option<String>,
 
     /// Use the specified target world from a WIT package.
-    #[clap(
-        long = "target",
-        short = 't',
-        value_name = "TARGET",
-        requires = "reactor"
-    )]
+    #[clap(long = "target", short = 't', value_name = "TARGET", requires = "lib")]
     pub target: Option<String>,
 
     /// Use the specified default registry when generating the package.
@@ -287,9 +281,7 @@ impl NewCommand {
         metadata.set_implicit(true);
         metadata.set_position(doc.len());
         metadata["component"] = Item::Table(component);
-
         doc["package"]["metadata"] = Item::Table(metadata);
-        doc["dependencies"][BINDINGS_CRATE_NAME] = value(env!("CARGO_PKG_VERSION"));
 
         fs::write(&manifest_path, doc.to_string()).with_context(|| {
             format!(
@@ -297,6 +289,22 @@ impl NewCommand {
                 path = manifest_path.display()
             )
         })?;
+
+        // Run cargo add for wit-bindgen
+        let mut cargo_add_command = std::process::Command::new("cargo");
+        cargo_add_command.arg("add");
+        cargo_add_command.arg("--quiet");
+        cargo_add_command.arg("--no-default-features");
+        cargo_add_command.arg("--features");
+        cargo_add_command.arg("realloc");
+        cargo_add_command.arg(WIT_BINDGEN_CRATE);
+        cargo_add_command.current_dir(out_dir);
+        let status = cargo_add_command
+            .status()
+            .context("failed to execute `cargo add` command")?;
+        if !status.success() {
+            bail!("`cargo add` command exited with non-zero status");
+        }
 
         config.terminal().status(
             "Updated",
@@ -307,7 +315,7 @@ impl NewCommand {
     }
 
     fn is_command(&self) -> bool {
-        self.command || !self.reactor
+        self.command || !self.lib
     }
 
     fn generate_source(
@@ -322,7 +330,7 @@ impl NewCommand {
             }
             None => {
                 if self.is_command() {
-                    Ok(r#"cargo_component_bindings::generate!();
+                    Ok(r#"mod bindings;
 
 fn main() {
     println!("Hello, world!");
@@ -330,7 +338,7 @@ fn main() {
 "#
                     .into())
                 } else {
-                    Ok(r#"cargo_component_bindings::generate!();
+                    Ok(r#"mod bindings;
 
 use bindings::Guest;
 
@@ -439,7 +447,14 @@ world example {{
                 fs::write(
                     &settings_path,
                     r#"{
-    "rust-analyzer.check.overrideCommand": ["cargo", "component", "check", "--message-format=json"]
+    "rust-analyzer.check.overrideCommand": [
+        "cargo",
+        "component",
+        "check",
+        "--workspace",
+        "--all-targets",
+        "--message-format=json"
+    ],
 }
 "#,
                 )
@@ -466,6 +481,8 @@ world example {{
               (lsp-rust-analyzer-cargo-override-command . ["cargo"
                                                            (\, "component")
                                                            (\, "check")
+                                                           (\, "--workspace")
+                                                           (\, "--all-targets")
                                                            (\, "--message-format=json")]))))
 "#,
                 )

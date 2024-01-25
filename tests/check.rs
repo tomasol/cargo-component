@@ -2,17 +2,14 @@ use crate::support::*;
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use predicates::{boolean::PredicateBooleanExt, str::contains};
-use std::{fmt::Write, fs};
+use std::{fmt::Write, fs, rc::Rc};
+use tempfile::TempDir;
 
 mod support;
 
 #[test]
 fn it_checks_a_new_project() -> Result<()> {
     let project = Project::new("foo")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
 
     project
         .cargo_component("check")
@@ -26,10 +23,6 @@ fn it_checks_a_new_project() -> Result<()> {
 #[test]
 fn it_finds_errors() -> Result<()> {
     let project = Project::new("foo")?;
-    project.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
 
     let mut src = fs::read_to_string(project.root().join("src/lib.rs"))?;
     write!(&mut src, "\n\nfn foo() -> String {{\n  \"foo\"\n}}\n")?;
@@ -47,49 +40,44 @@ fn it_finds_errors() -> Result<()> {
 
 #[test]
 fn it_checks_a_workspace() -> Result<()> {
-    let project = project()?
-        .file(
-            "Cargo.toml",
-            r#"[workspace]
-members = ["foo", "bar", "baz"]
-"#,
-        )?
-        .file(
-            "baz/Cargo.toml",
-            r#"[package]
+    let dir = Rc::new(TempDir::new()?);
+    let project = Project {
+        dir: dir.clone(),
+        root: dir.path().to_owned(),
+    };
+
+    project.file(
+        "baz/Cargo.toml",
+        r#"[package]
 name = "baz"
 version = "0.1.0"
 edition = "2021"
     
 [dependencies]
 "#,
-        )?
-        .file("baz/src/lib.rs", "")?
-        .build();
+    )?;
+
+    project.file("baz/src/lib.rs", "")?;
 
     project
-        .cargo_component("new --reactor foo")
+        .cargo_component("new --lib foo")
         .assert()
         .stderr(contains("Updated manifest of package `foo`"))
         .success();
 
-    let member = ProjectBuilder::new(project.root().join("foo")).build();
-    member.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
-
     project
-        .cargo_component("new --reactor bar")
+        .cargo_component("new --lib bar")
         .assert()
         .stderr(contains("Updated manifest of package `bar`"))
         .success();
 
-    let member = ProjectBuilder::new(project.root().join("bar")).build();
-    member.update_manifest(|mut doc| {
-        redirect_bindings_crate(&mut doc);
-        Ok(doc)
-    })?;
+    // Add the workspace after all of the packages have been created.
+    project.file(
+        "Cargo.toml",
+        r#"[workspace]
+    members = ["foo", "bar", "baz"]
+    "#,
+    )?;
 
     project
         .cargo_component("check")
