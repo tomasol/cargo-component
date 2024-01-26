@@ -216,7 +216,7 @@ impl<'a> BindingsGenerator<'a> {
             "expected exactly one source file to be generated"
         );
 
-        Ok(sources[0].to_string())
+        Ok(format!("#![allow(dead_code)]\n{}", sources[0].to_string()))
     }
 
     fn dependencies_are_newer(&self, last_modified_output: SystemTime) -> Result<bool> {
